@@ -6,7 +6,6 @@ GitHub: https://github.com/jekyll2014/kirtis-mcp
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) installed
-- Open WebUI (for proxy/Open WebUI integration only)
 
 ---
 
@@ -20,7 +19,9 @@ uv sync
 
 ---
 
-## 2. Register with Claude Code (MCP — stdio)
+## Claude Code (stdio MCP)
+
+### Register the MCP server
 
 ```bash
 claude mcp add kirtis -- uv run --project /path/to/kirtis-mcp python /path/to/kirtis-mcp/server.py
@@ -28,15 +29,11 @@ claude mcp add kirtis -- uv run --project /path/to/kirtis-mcp python /path/to/ki
 
 Replace `/path/to/kirtis-mcp` with the actual clone path (e.g. `E:\WORK\programming\kirtis-mcp` on Windows).
 
-Verify: restart Claude Code, then run `/mcp` — `kirtis` should appear with 3 tools.
+Verify: restart Claude Code, run `/mcp` — `kirtis` should appear with 3 tools.
 
----
+### Install the skill (optional)
 
-## 3. Install the Claude Code skill (optional)
-
-The skill teaches Claude how to interpret kirtis results (stress marks, grammar abbreviations).
-
-Copy `SKILL.md` into your Claude Code skills directory:
+The skill teaches Claude how to interpret stress marks and grammar abbreviations.
 
 **Windows:**
 ```
@@ -49,11 +46,13 @@ mkdir -p ~/.claude/skills/kirtis
 cp .claude/skills/kirtis/SKILL.md ~/.claude/skills/kirtis/SKILL.md
 ```
 
-Or clone into a project's `.claude/skills/kirtis/` folder to scope it to that project.
+Or place into a project's `.claude/skills/kirtis/` to scope it to that project only.
 
 ---
 
-## 4. Start the proxy
+## Open WebUI (HTTP proxy)
+
+### Start the proxy
 
 Double-click `start.bat`, or run:
 
@@ -63,30 +62,50 @@ uv run python proxy.py
 ```
 
 Proxy starts at `http://localhost:8010`.  
-Verify: open `http://localhost:8010/docs` in browser — should show 3 endpoints.
+Verify: open `http://localhost:8010/docs` — should show 3 endpoints.
 
----
-
-## 5. Connect to Open WebUI
+### Connect to Open WebUI
 
 1. Open WebUI → **Admin Panel** → **Tools**
 2. Click **"+"** (Add tool server)
 3. Set URL: `http://localhost:8010`
-4. Click **Save** — three tools appear:
-   - `lookup_words` — prefix search
-   - `get_stress` — stress marks + grammar for one word
-   - `get_word_info` — full two-phase lookup (preferred)
+4. Save — three tools appear: `lookup_words`, `get_stress`, `get_word_info`
+
+### Enable tools on a model
+
+1. Open WebUI → **Workspace** → **Models** → edit model
+2. Under **Tools**, enable the Kirtis tools → Save
+
+Or enable per-chat: click the tools icon in the chat input bar.
 
 ---
 
-## 6. Enable tools on a model
+## Unsloth / SSE clients
 
-1. Open WebUI → **Workspace** → **Models**
-2. Edit the model you want to use
-3. Under **Tools**, enable the Kirtis tools
-4. Save
+### Start the SSE server
 
-Or enable per-chat: click the tools icon in the chat input bar.
+Double-click `start-sse.bat`, or run:
+
+```bash
+uv run --project /path/to/kirtis-mcp python /path/to/kirtis-mcp/server.py --sse --port 8020
+```
+
+Server starts at `http://localhost:8020`.
+
+### Connect in Unsloth desktop
+
+In Unsloth → **Add MCP** form:
+
+- **URL**: `http://localhost:8020/sse`
+- **Headers**: *(leave empty)*
+
+### Connect via stdio (alternative)
+
+If the client supports stdio commands:
+
+```
+uv run --project /path/to/kirtis-mcp python /path/to/kirtis-mcp/server.py
+```
 
 ---
 
@@ -107,6 +126,5 @@ Or enable per-chat: click the tools icon in the chat input bar.
 
 ## Notes
 
-- Proxy must be running before Open WebUI tries to call the tools
 - kirtis.info has no auth — no API key needed
 - `/api/krc/` requires capitalized first letter — handled automatically
