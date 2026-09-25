@@ -35,7 +35,7 @@ async def lookup_words(word: str) -> list[str]:
         word: Lowercase word or prefix (e.g. "eiti", "ei").
     """
     normalized = word.lower().strip()
-    url = f"{BASE_URL}/zodynas/{quote(normalized)}"
+    url = f"{BASE_URL}/zodynas/{quote(normalized, safe='')}"
     async with httpx.AsyncClient(headers=HEADERS, timeout=60.0) as client:
         try:
             r = await client.get(url)
@@ -61,7 +61,7 @@ async def get_stress(word: str) -> list[dict]:
         word: Lithuanian word, any capitalisation (e.g. "eiti").
     """
     capitalized = _capitalize_first(word.strip())
-    url = f"{BASE_URL}/krc/{quote(capitalized)}"
+    url = f"{BASE_URL}/krc/{quote(capitalized, safe='')}"
     async with httpx.AsyncClient(headers=HEADERS, timeout=60.0) as client:
         try:
             r = await client.get(url)
@@ -115,7 +115,7 @@ if __name__ == "__main__":
     import sys
     if "--sse" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8020
-        sse_server = FastMCP("kirtis", host="0.0.0.0", port=port)
+        sse_server = FastMCP("kirtis", host="127.0.0.1", port=port)
         sse_server.add_tool(lookup_words)
         sse_server.add_tool(get_stress)
         sse_server.add_tool(get_word_info)
