@@ -1,5 +1,7 @@
 # Kirtis MCP — Setup
 
+GitHub: https://github.com/jekyll2014/kirtis-mcp
+
 ## Prerequisites
 
 - Python 3.11+
@@ -8,10 +10,11 @@
 
 ---
 
-## 1. Install dependencies
+## 1. Clone and install
 
 ```bash
-cd E:\WORK\programming\kirtis-mcp
+git clone https://github.com/jekyll2014/kirtis-mcp.git
+cd kirtis-mcp
 uv sync
 ```
 
