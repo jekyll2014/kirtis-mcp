@@ -6,7 +6,7 @@ GitHub: https://github.com/jekyll2014/kirtis-mcp
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) installed
-- Open WebUI running
+- Open WebUI (for proxy/Open WebUI integration only)
 
 ---
 
@@ -20,12 +20,45 @@ uv sync
 
 ---
 
-## 2. Start the proxy
+## 2. Register with Claude Code (MCP — stdio)
+
+```bash
+claude mcp add kirtis -- uv run --project /path/to/kirtis-mcp python /path/to/kirtis-mcp/server.py
+```
+
+Replace `/path/to/kirtis-mcp` with the actual clone path (e.g. `E:\WORK\programming\kirtis-mcp` on Windows).
+
+Verify: restart Claude Code, then run `/mcp` — `kirtis` should appear with 3 tools.
+
+---
+
+## 3. Install the Claude Code skill (optional)
+
+The skill teaches Claude how to interpret kirtis results (stress marks, grammar abbreviations).
+
+Copy `SKILL.md` into your Claude Code skills directory:
+
+**Windows:**
+```
+copy .claude\skills\kirtis\SKILL.md %USERPROFILE%\.claude\skills\kirtis\SKILL.md
+```
+
+**macOS / Linux:**
+```bash
+mkdir -p ~/.claude/skills/kirtis
+cp .claude/skills/kirtis/SKILL.md ~/.claude/skills/kirtis/SKILL.md
+```
+
+Or clone into a project's `.claude/skills/kirtis/` folder to scope it to that project.
+
+---
+
+## 4. Start the proxy
 
 Double-click `start.bat`, or run:
 
 ```bash
-cd E:\WORK\programming\kirtis-mcp
+cd kirtis-mcp
 uv run python proxy.py
 ```
 
@@ -34,7 +67,7 @@ Verify: open `http://localhost:8010/docs` in browser — should show 3 endpoints
 
 ---
 
-## 3. Connect to Open WebUI
+## 5. Connect to Open WebUI
 
 1. Open WebUI → **Admin Panel** → **Tools**
 2. Click **"+"** (Add tool server)
@@ -46,7 +79,7 @@ Verify: open `http://localhost:8010/docs` in browser — should show 3 endpoints
 
 ---
 
-## 4. Enable tools on a model
+## 6. Enable tools on a model
 
 1. Open WebUI → **Workspace** → **Models**
 2. Edit the model you want to use
