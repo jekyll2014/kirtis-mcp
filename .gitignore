@@ -9,3 +9,10 @@ dotnet/.vs/
 Kirtis/
 
 .serena/
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
