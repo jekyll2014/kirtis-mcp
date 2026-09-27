@@ -1,3 +1,3 @@
 @echo off
-cd /d E:\WORK\programming\kirtis-mcp
-uv run python proxy.py
+cd /d E:\WORK\programming\kirtis-mcp\dotnet
+dotnet run

@@ -2,18 +2,36 @@
 
 GitHub: https://github.com/jekyll2014/kirtis-mcp
 
-## Prerequisites
-
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) installed
+Two implementations available. C# (.NET) is recommended — no Python environment needed.
 
 ---
 
-## 1. Clone and install
+## 1. Clone
 
 ```bash
 git clone https://github.com/jekyll2014/kirtis-mcp.git
 cd kirtis-mcp
+```
+
+---
+
+## 2. Build
+
+### C# (.NET) — recommended
+
+Requires [.NET 9 SDK](https://dotnet.microsoft.com/download).
+
+```bash
+cd dotnet
+dotnet build
+```
+
+### Python (legacy)
+
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+```bash
+cd python
 uv sync
 ```
 
@@ -21,15 +39,34 @@ uv sync
 
 ## Claude Code (stdio MCP)
 
-### Register the MCP server
+### C# (.NET)
+
+Register the MCP server:
 
 ```bash
-claude mcp add kirtis -- uv run --project /path/to/kirtis-mcp python /path/to/kirtis-mcp/server.py
+claude mcp add kirtis -- dotnet run --project E:\WORK\programming\kirtis-mcp\dotnet
 ```
 
-Replace `/path/to/kirtis-mcp` with the actual clone path (e.g. `E:\WORK\programming\kirtis-mcp` on Windows).
+Or edit `~/.claude.json` manually:
 
-Verify: restart Claude Code, run `/mcp` — `kirtis` should appear with 3 tools.
+```json
+"kirtis": {
+  "type": "stdio",
+  "command": "dotnet",
+  "args": ["run", "--project", "E:/WORK/programming/kirtis-mcp/dotnet"],
+  "env": {}
+}
+```
+
+### Python (legacy)
+
+```bash
+claude mcp add kirtis -- uv run --project E:\WORK\programming\kirtis-mcp\python python E:\WORK\programming\kirtis-mcp\python\server.py
+```
+
+### Verify
+
+Restart Claude Code, run `/mcp` — `kirtis` should appear with 3 tools.
 
 ### Install the skill (optional)
 
@@ -46,30 +83,43 @@ mkdir -p ~/.claude/skills/kirtis
 cp .claude/skills/kirtis/SKILL.md ~/.claude/skills/kirtis/SKILL.md
 ```
 
-Or place into a project's `.claude/skills/kirtis/` to scope it to that project only.
-
 ---
 
 ## Open WebUI (HTTP proxy)
 
-### Start the proxy
+### C# (.NET)
 
-Double-click `start.bat`, or run:
+Start the SSE server — it also serves REST endpoints:
 
 ```bash
-cd kirtis-mcp
-uv run python proxy.py
+dotnet\start-sse.bat
+# or:
+cd dotnet && dotnet run -- --sse --port 8020
 ```
 
-Proxy starts at `http://localhost:8010`.  
-Verify: open `http://localhost:8010/docs` — should show 3 endpoints.
+Verify: `http://localhost:8020/get_word_info` (POST `{"word":"test"}` should return JSON).
 
-### Connect to Open WebUI
+Connect to Open WebUI:
 
 1. Open WebUI → **Admin Panel** → **Tools**
 2. Click **"+"** (Add tool server)
-3. Set URL: `http://localhost:8010`
+3. Set URL: `http://localhost:8020`
 4. Save — three tools appear: `lookup_words`, `get_stress`, `get_word_info`
+
+### Python (legacy)
+
+Start the REST proxy:
+
+```bash
+python\start.bat
+# or:
+cd python && uv run python proxy.py
+```
+
+Proxy starts at `http://localhost:8010`.  
+Verify: open `http://localhost:8010/docs`.
+
+Connect to Open WebUI — same steps as above, but URL is `http://localhost:8010`.
 
 ### Enable tools on a model
 
@@ -82,30 +132,27 @@ Or enable per-chat: click the tools icon in the chat input bar.
 
 ## Unsloth / SSE clients
 
-### Start the SSE server
-
-Double-click `start-sse.bat`, or run:
+### C# (.NET)
 
 ```bash
-uv run --project /path/to/kirtis-mcp python /path/to/kirtis-mcp/server.py --sse --port 8020
+dotnet\start-sse.bat
+# or:
+cd dotnet && dotnet run -- --sse --port 8020
 ```
 
-Server starts at `http://localhost:8020`.
-
-### Connect in Unsloth desktop
-
-In Unsloth → **Add MCP** form:
-
+In Unsloth → **Add MCP**:
 - **URL**: `http://localhost:8020/sse`
 - **Headers**: *(leave empty)*
 
-### Connect via stdio (alternative)
+### Python (legacy)
 
-If the client supports stdio commands:
+```bash
+python\start-sse.bat
+# or:
+cd python && uv run python server.py --sse --port 8020
+```
 
-```
-uv run --project /path/to/kirtis-mcp python /path/to/kirtis-mcp/server.py
-```
+Same URL: `http://localhost:8020/sse`
 
 ---
 
@@ -122,9 +169,15 @@ uv run --project /path/to/kirtis-mcp python /path/to/kirtis-mcp/server.py
 - `class` — part-of-speech: `dktv.` noun · `vksm.` verb · `būdv.` adjective · `prv.` adverb
 - `state` — grammatical tags: e.g. `["vyr.gim.", "vnsk.", "V."]` = masculine singular nominative
 
+**Stress diacritics on the `word` field:**
+- Grave `` ` `` — falling tone (e.g. `žmogùs`)
+- Tilde `~` — rising/mixed tone (e.g. `Ẽiti`)
+- Acute — short stress
+
 ---
 
 ## Notes
 
 - kirtis.info has no auth — no API key needed
-- `/api/krc/` requires capitalized first letter — handled automatically
+- `/api/krc/` requires capitalized first letter — handled automatically by both implementations
+- C# SSE mode serves both MCP (`/mcp`) and REST (`/lookup_words`, `/get_stress`, `/get_word_info`) on the same port

@@ -2,6 +2,13 @@
 
 MCP server for [kirtis.info](https://kirtis.info) — Lithuanian stress marks and grammatical information.
 
+Two implementations, same MCP tools:
+
+| Implementation | Folder | Requires |
+|----------------|--------|---------|
+| **C# (.NET)** — recommended | `dotnet/` | .NET 9 SDK |
+| Python (legacy) | `python/` | Python 3.11+, uv |
+
 ## Tools
 
 | Tool | Description |
@@ -18,22 +25,33 @@ get_word_info("žmogus")
   stress: grave on last syllable = falling tone
 ```
 
+## Quick start
+
+**C# (.NET):**
+```bash
+cd dotnet
+dotnet run            # stdio MCP (Claude Code)
+dotnet run -- --sse   # SSE + REST server on port 8020
+dotnet run -- --help  # show all options
+```
+
+**Python:**
+```bash
+cd python
+uv sync
+uv run python server.py           # stdio MCP
+uv run python server.py --sse     # SSE server on port 8020
+uv run python proxy.py            # REST proxy on port 8010
+```
+
 ## Integrations
 
-| Client | Transport | How |
-|--------|-----------|-----|
-| Claude Code | stdio | Register via `claude mcp add` |
-| Open WebUI | HTTP (OpenAPI proxy) | Point tool server at `http://localhost:8010` |
-| Unsloth / SSE clients | SSE | Point MCP URL at `http://localhost:8020/sse` |
+| Client | Transport | .NET | Python |
+|--------|-----------|------|--------|
+| Claude Code | stdio | `dotnet run` | `uv run python server.py` |
+| Open WebUI | HTTP (OpenAPI) | `--sse`, port 8020 | `proxy.py`, port 8010 |
+| Unsloth / SSE clients | SSE | `--sse`, `/sse` endpoint | `--sse`, `/sse` endpoint |
 
 See [SETUP.md](SETUP.md) for full instructions.
 
-## Install
-
-```bash
-git clone https://github.com/jekyll2014/kirtis-mcp.git
-cd kirtis-mcp
-uv sync
-```
-
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+GitHub: https://github.com/jekyll2014/kirtis-mcp
