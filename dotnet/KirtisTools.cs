@@ -18,15 +18,17 @@ public class KirtisTools(IHttpClientFactory httpFactory, KirtisCacheService cach
     public async Task<List<string>> LookupWords(
         [Description("Lowercase word or prefix (e.g. 'eiti', 'ei')")] string word)
     {
-        var normalized = word.ToLower().Trim();
+        var normalized = word.ToLowerInvariant().Trim();
 
-        if (cache.TryGet(normalized, out var cached) && cached!.RelatedWords.Count > 0)
-            return cached.RelatedWords;
+        if (cache.TryGetLookup(normalized, out var cached))
+            return cached!;
 
         try
         {
             var json = await _http.GetStringAsync($"zodynas/{Uri.EscapeDataString(normalized)}");
-            return JsonSerializer.Deserialize<List<string>>(json) ?? [];
+            var result = JsonSerializer.Deserialize<List<string>>(json) ?? [];
+            cache.AddLookup(normalized, result);
+            return result;
         }
         catch { return []; }
     }
@@ -40,7 +42,7 @@ public class KirtisTools(IHttpClientFactory httpFactory, KirtisCacheService cach
     public async Task<List<WordEntry>> GetStress(
         [Description("Lithuanian word, any capitalisation (e.g. 'eiti')")] string word)
     {
-        var normalized = word.ToLower().Trim();
+        var normalized = word.ToLowerInvariant().Trim();
 
         if (cache.TryGetStress(normalized, out var cached))
             return cached!;
@@ -65,7 +67,7 @@ public class KirtisTools(IHttpClientFactory httpFactory, KirtisCacheService cach
     public async Task<WordInfo> GetWordInfo(
         [Description("Lithuanian word to look up (e.g. 'eiti', 'žmogus')")] string word)
     {
-        var normalized = word.ToLower().Trim();
+        var normalized = word.ToLowerInvariant().Trim();
 
         if (cache.TryGet(normalized, out var cached))
             return cached!;
@@ -80,7 +82,7 @@ public class KirtisTools(IHttpClientFactory httpFactory, KirtisCacheService cach
         var deduped = new List<WordEntry>();
         foreach (var entry in allEntries)
         {
-            if (seen.Add(entry.Word.ToLower()))
+            if (seen.Add(entry.Word.ToLowerInvariant()))
                 deduped.Add(entry);
         }
 
@@ -90,5 +92,5 @@ public class KirtisTools(IHttpClientFactory httpFactory, KirtisCacheService cach
     }
 
     private static string CapitalizeFirst(string word) =>
-        word.Length == 0 ? word : char.ToUpper(word[0]) + word[1..];
+        word.Length == 0 ? word : char.ToUpperInvariant(word[0]) + word[1..];
 }

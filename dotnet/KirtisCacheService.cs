@@ -7,21 +7,29 @@ namespace KirtisMcp;
 
 public sealed class KirtisCacheService(CacheSettings settings) : BackgroundService
 {
-    private FrozenDictionary<string, WordInfo> _cache = FrozenDictionary<string, WordInfo>.Empty;
+    // volatile: written by ExecuteAsync (background thread), read by request threads.
+    // Without volatile, ARM CPUs can serve stale values from per-core caches.
+    private volatile FrozenDictionary<string, WordInfo> _cache = FrozenDictionary<string, WordInfo>.Empty;
     private readonly ConcurrentDictionary<string, WordInfo> _newWordEntries = new(StringComparer.OrdinalIgnoreCase);
 
-    // Keyed by lowercase word (as passed to GetStress before capitalization)
-    private FrozenDictionary<string, List<WordEntry>> _stressCache = FrozenDictionary<string, List<WordEntry>>.Empty;
+    private volatile FrozenDictionary<string, List<WordEntry>> _stressCache = FrozenDictionary<string, List<WordEntry>>.Empty;
     private readonly ConcurrentDictionary<string, List<WordEntry>> _newStressEntries = new(StringComparer.OrdinalIgnoreCase);
 
-    private string? _cacheDir;
+    private volatile FrozenDictionary<string, List<string>> _lookupCache = FrozenDictionary<string, List<string>>.Empty;
+    private readonly ConcurrentDictionary<string, List<string>> _newLookups = new(StringComparer.OrdinalIgnoreCase);
+
+    private volatile string? _cacheDir;
+    private volatile bool _isLoaded;
+
+    // SemaphoreSlim prevents concurrent flushes (timer vs StopAsync race).
+    private readonly SemaphoreSlim _flushLock = new(1, 1);
 
     private static readonly JsonSerializerOptions CacheOpts = new() { PropertyNameCaseInsensitive = true };
     private static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = false };
 
-    public bool IsLoaded { get; private set; }
+    public bool IsLoaded => _isLoaded;
 
-    // --- WordInfo (get_word_info / lookup_words) ---
+    // --- Public API ---
 
     public bool TryGet(string word, out WordInfo? result)
     {
@@ -29,17 +37,12 @@ public sealed class KirtisCacheService(CacheSettings settings) : BackgroundServi
         if (!settings.ReadEnabled) return false;
         var key = word.ToLowerInvariant().Trim();
         if (_newWordEntries.TryGetValue(key, out result)) return true;
-        if (!IsLoaded) return false;
+        if (!_isLoaded) return false;
         return _cache.TryGetValue(key, out result);
     }
 
-    public void Add(WordInfo entry)
-    {
-        if (!settings.WriteEnabled) return;
-        _newWordEntries[entry.QueryWord] = entry;
-    }
-
-    // --- Stress entries (get_stress) ---
+    public void Add(WordInfo entry) =>
+        _newWordEntries[entry.QueryWord.ToLowerInvariant().Trim()] = entry;
 
     public bool TryGetStress(string word, out List<WordEntry>? result)
     {
@@ -47,15 +50,30 @@ public sealed class KirtisCacheService(CacheSettings settings) : BackgroundServi
         if (!settings.ReadEnabled) return false;
         var key = word.ToLowerInvariant().Trim();
         if (_newStressEntries.TryGetValue(key, out result)) return true;
-        if (!IsLoaded) return false;
+        if (!_isLoaded) return false;
         return _stressCache.TryGetValue(key, out result);
     }
 
-    public void AddStress(string word, List<WordEntry> entries)
-    {
-        if (!settings.WriteEnabled) return;
+    public void AddStress(string word, List<WordEntry> entries) =>
         _newStressEntries[word.ToLowerInvariant().Trim()] = entries;
+
+    public bool TryGetLookup(string word, out List<string>? result)
+    {
+        result = null;
+        if (!settings.ReadEnabled) return false;
+        var key = word.ToLowerInvariant().Trim();
+        if (_newLookups.TryGetValue(key, out result)) return true;
+        if (_newWordEntries.TryGetValue(key, out var wi) && wi.RelatedWords.Count > 0)
+            { result = wi.RelatedWords; return true; }
+        if (!_isLoaded) return false;
+        if (_lookupCache.TryGetValue(key, out result)) return true;
+        if (_cache.TryGetValue(key, out wi) && wi.RelatedWords.Count > 0)
+            { result = wi.RelatedWords; return true; }
+        return false;
     }
+
+    public void AddLookup(string word, List<string> related) =>
+        _newLookups[word.ToLowerInvariant().Trim()] = related;
 
     // --- Loading ---
 
@@ -69,9 +87,10 @@ public sealed class KirtisCacheService(CacheSettings settings) : BackgroundServi
         }
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var wordDict = new Dictionary<string, WordInfo>(200_000, StringComparer.OrdinalIgnoreCase);
+        var wordDict   = new Dictionary<string, WordInfo>(200_000, StringComparer.OrdinalIgnoreCase);
+        var stressDict = new Dictionary<string, List<WordEntry>>(StringComparer.OrdinalIgnoreCase);
+        var lookupDict = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
-        // Load batch files (camelCase format from downloader)
         foreach (var file in Directory.EnumerateFiles(_cacheDir, "kirtis_batch_*.json").Order())
         {
             if (stoppingToken.IsCancellationRequested) break;
@@ -82,36 +101,48 @@ public sealed class KirtisCacheService(CacheSettings settings) : BackgroundServi
                 wordDict[e.QueryWord] = new WordInfo(e.QueryWord, e.RelatedWords, Intern(e.StressEntries), e.HasStressInfo);
         }
 
-        // Load word updates (snake_case WordInfo format written by this service)
-        var wordUpdates = Path.Combine(_cacheDir, "kirtis_updates.json");
-        if (File.Exists(wordUpdates) && !stoppingToken.IsCancellationRequested)
-        {
-            await using var stream = File.OpenRead(wordUpdates);
-            var updates = await JsonSerializer.DeserializeAsync<List<WordInfo>>(stream, CacheOpts, stoppingToken);
-            if (updates is not null)
-                foreach (var u in updates)
-                    wordDict[u.QueryWord] = u;
-        }
+        await LoadJsonFile<List<WordInfo>>(Path.Combine(_cacheDir, "kirtis_updates.json"), stoppingToken,
+            updates => { foreach (var u in updates) wordDict[u.QueryWord] = u; });
 
         _cache = wordDict.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
-        // Load stress updates (dictionary: lowercase_word → entries[])
-        var stressDict = new Dictionary<string, List<WordEntry>>(StringComparer.OrdinalIgnoreCase);
-        var stressUpdates = Path.Combine(_cacheDir, "kirtis_stress_updates.json");
-        if (File.Exists(stressUpdates) && !stoppingToken.IsCancellationRequested)
-        {
-            await using var stream = File.OpenRead(stressUpdates);
-            var updates = await JsonSerializer.DeserializeAsync<Dictionary<string, List<WordEntry>>>(stream, CacheOpts, stoppingToken);
-            if (updates is not null)
-                foreach (var (k, v) in updates)
-                    stressDict[k] = v;
-        }
+        await LoadJsonFile<Dictionary<string, List<WordEntry>>>(Path.Combine(_cacheDir, "kirtis_stress_updates.json"), stoppingToken,
+            updates => { foreach (var (k, v) in updates) stressDict[k] = v; });
 
         _stressCache = stressDict.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
-        IsLoaded = true;
+        await LoadJsonFile<Dictionary<string, List<string>>>(Path.Combine(_cacheDir, "kirtis_lookup_updates.json"), stoppingToken,
+            updates => { foreach (var (k, v) in updates) lookupDict[k] = v; });
+
+        _lookupCache = lookupDict.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+
+        _isLoaded = true;
         await Console.Error.WriteLineAsync(
-            $"[kirtis-cache] Loaded {_cache.Count:N0} word entries, {_stressCache.Count:N0} stress entries in {sw.ElapsedMilliseconds}ms");
+            $"[kirtis-cache] Loaded {_cache.Count:N0} word, {_stressCache.Count:N0} stress, {_lookupCache.Count:N0} lookup entries in {sw.ElapsedMilliseconds}ms");
+
+        if (!settings.WriteEnabled) return;
+
+        try
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+                await FlushAllAsync();
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private static async Task LoadJsonFile<T>(string path, CancellationToken ct, Action<T> apply)
+    {
+        if (!File.Exists(path) || ct.IsCancellationRequested) return;
+        try
+        {
+            await using var stream = File.OpenRead(path);
+            var data = await JsonSerializer.DeserializeAsync<T>(stream, CacheOpts, ct);
+            if (data is not null) apply(data);
+        }
+        catch { }
     }
 
     // --- Flushing ---
@@ -119,60 +150,84 @@ public sealed class KirtisCacheService(CacheSettings settings) : BackgroundServi
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         await base.StopAsync(cancellationToken);
-        if (!settings.WriteEnabled || _cacheDir is null) return;
-        if (_newWordEntries.Count > 0) await FlushWordEntriesAsync(cancellationToken);
-        if (_newStressEntries.Count > 0) await FlushStressEntriesAsync(cancellationToken);
+        if (settings.WriteEnabled && _cacheDir is not null)
+            await FlushAllAsync();
     }
 
-    private async Task FlushWordEntriesAsync(CancellationToken cancellationToken)
+    private async Task FlushAllAsync()
     {
-        var updatesFile = Path.Combine(_cacheDir!, "kirtis_updates.json");
-
-        var existing = new List<WordInfo>();
-        if (File.Exists(updatesFile))
+        await _flushLock.WaitAsync();
+        try
         {
-            try
-            {
-                await using var rs = File.OpenRead(updatesFile);
-                existing = await JsonSerializer.DeserializeAsync<List<WordInfo>>(rs, CacheOpts, cancellationToken) ?? [];
-            }
-            catch { }
+            if (_newWordEntries.Count > 0)   await FlushWordEntriesAsync();
+            if (_newStressEntries.Count > 0) await FlushStressEntriesAsync();
+            if (_newLookups.Count > 0)       await FlushLookupEntriesAsync();
         }
+        finally
+        {
+            _flushLock.Release();
+        }
+    }
 
+    // File writes use CancellationToken.None — cancelling mid-write would corrupt JSON.
+    private async Task FlushWordEntriesAsync()
+    {
+        var file = Path.Combine(_cacheDir!, "kirtis_updates.json");
         var merged = new Dictionary<string, WordInfo>(StringComparer.OrdinalIgnoreCase);
-        foreach (var e in existing) merged[e.QueryWord] = e;
-        foreach (var (_, v) in _newWordEntries) merged[v.QueryWord] = v;
-
-        await using var ws = File.Create(updatesFile);
-        await JsonSerializer.SerializeAsync(ws, merged.Values.ToList(), WriteOpts, cancellationToken);
-
-        await Console.Error.WriteLineAsync($"[kirtis-cache] Flushed {_newWordEntries.Count} word entries → {updatesFile}");
-    }
-
-    private async Task FlushStressEntriesAsync(CancellationToken cancellationToken)
-    {
-        var stressFile = Path.Combine(_cacheDir!, "kirtis_stress_updates.json");
-
-        var existing = new Dictionary<string, List<WordEntry>>(StringComparer.OrdinalIgnoreCase);
-        if (File.Exists(stressFile))
+        if (File.Exists(file))
         {
             try
             {
-                await using var rs = File.OpenRead(stressFile);
-                var loaded = await JsonSerializer.DeserializeAsync<Dictionary<string, List<WordEntry>>>(rs, CacheOpts, cancellationToken);
-                if (loaded is not null)
-                    foreach (var (k, v) in loaded)
-                        existing[k] = v;
+                await using var rs = File.OpenRead(file);
+                var existing = await JsonSerializer.DeserializeAsync<List<WordInfo>>(rs, CacheOpts);
+                if (existing is not null) foreach (var e in existing) merged[e.QueryWord] = e;
             }
             catch { }
         }
+        foreach (var (k, v) in _newWordEntries) merged[k] = v;
+        await using var ws = File.Create(file);
+        await JsonSerializer.SerializeAsync(ws, merged.Values.ToList(), WriteOpts);
+        await Console.Error.WriteLineAsync($"[kirtis-cache] Flushed {_newWordEntries.Count} word entries → {file}");
+    }
 
-        foreach (var (k, v) in _newStressEntries) existing[k] = v;
+    private async Task FlushStressEntriesAsync()
+    {
+        var file = Path.Combine(_cacheDir!, "kirtis_stress_updates.json");
+        var merged = new Dictionary<string, List<WordEntry>>(StringComparer.OrdinalIgnoreCase);
+        if (File.Exists(file))
+        {
+            try
+            {
+                await using var rs = File.OpenRead(file);
+                var existing = await JsonSerializer.DeserializeAsync<Dictionary<string, List<WordEntry>>>(rs, CacheOpts);
+                if (existing is not null) foreach (var (k, v) in existing) merged[k] = v;
+            }
+            catch { }
+        }
+        foreach (var (k, v) in _newStressEntries) merged[k] = v;
+        await using var ws = File.Create(file);
+        await JsonSerializer.SerializeAsync(ws, merged, WriteOpts);
+        await Console.Error.WriteLineAsync($"[kirtis-cache] Flushed {_newStressEntries.Count} stress entries → {file}");
+    }
 
-        await using var ws = File.Create(stressFile);
-        await JsonSerializer.SerializeAsync(ws, existing, WriteOpts, cancellationToken);
-
-        await Console.Error.WriteLineAsync($"[kirtis-cache] Flushed {_newStressEntries.Count} stress entries → {stressFile}");
+    private async Task FlushLookupEntriesAsync()
+    {
+        var file = Path.Combine(_cacheDir!, "kirtis_lookup_updates.json");
+        var merged = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        if (File.Exists(file))
+        {
+            try
+            {
+                await using var rs = File.OpenRead(file);
+                var existing = await JsonSerializer.DeserializeAsync<Dictionary<string, List<string>>>(rs, CacheOpts);
+                if (existing is not null) foreach (var (k, v) in existing) merged[k] = v;
+            }
+            catch { }
+        }
+        foreach (var (k, v) in _newLookups) merged[k] = v;
+        await using var ws = File.Create(file);
+        await JsonSerializer.SerializeAsync(ws, merged, WriteOpts);
+        await Console.Error.WriteLineAsync($"[kirtis-cache] Flushed {_newLookups.Count} lookup entries → {file}");
     }
 
     // Intern class names ("dktv.", "bdvr.", ...) and state strings ("vyr.gim.", "V.", ...)
