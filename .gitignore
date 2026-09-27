@@ -1,3 +1,9 @@
-.venv/
-__pycache__/
+python/.venv/
+python/__pycache__/
 *.pyc
+.ruff_cache/
+
+dotnet/bin/
+dotnet/obj/
+dotnet/.vs/
+Kirtis/
